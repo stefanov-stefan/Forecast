@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="bg">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#0a1628" />
+  <title>Прогноза — Поливна система</title>
+  <link rel="manifest" href="manifest.json" />
+  <link rel="apple-touch-icon" href="icon.png" />
+  <style>
+    :root {
+      --bg: #0a1628;
+      --card: #111d35;
+      --border: #1e3a5f;
+      --cyan: #00c8ff;
+      --green: #22c55e;
+      --red: #ef4444;
+      --yellow: #facc15;
+      --dim: #6b7fa3;
+      --text: #e2e8f0;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      font-size: 14px;
+      min-height: 100dvh;
+      padding: 12px;
+    }
+    h1 {
+      text-align: center;
+      color: var(--cyan);
+      font-size: 1.1rem;
+      margin-bottom: 2px;
+    }
+    .subtitle {
+      text-align: center;
+      color: var(--dim);
+      font-size: 0.75rem;
+      margin-bottom: 16px;
+    }
+    .btn {
+      display: block;
+      width: 100%;
+      padding: 12px;
+      background: var(--cyan);
+      color: #000;
+      font-weight: bold;
+      font-size: 1rem;
+      border: none;
+      border-radius: 10px;
+      cursor: pointer;
+      margin-bottom: 16px;
+    }
+    .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .section-title {
+      color: var(--cyan);
+      font-weight: bold;
+      margin: 16px 0 8px;
+      font-size: 0.9rem;
+    }
+    .table-wrap { overflow-x: auto; }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      overflow: hidden;
+    }
+    th {
+      background: #0d2347;
+      color: #fff;
+      padding: 6px 8px;
+      text-align: center;
+      font-size: 0.78rem;
+      white-space: nowrap;
+    }
+    td {
+      padding: 6px 8px;
+      border-top: 1px solid var(--border);
+      text-align: center;
+      font-size: 0.82rem;
+      white-space: nowrap;
+    }
+    tr.today td { font-weight: bold; background: #1a2e50; }
+    tr.skip-day td { background: #2a0f0f; }
+    tr.off-season td { color: var(--dim); }
+    .action-water { color: var(--green); font-weight: bold; }
+    .action-skip  { color: var(--red);   font-weight: bold; }
+    .action-off   { color: var(--dim); }
+    .rain-pos  { color: var(--cyan); }
+    .rain-zero { color: var(--dim); }
+    .prob-high   { color: var(--green); }
+    .prob-mid    { color: var(--yellow); }
+    .prob-low    { color: var(--dim); }
+    .summary {
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 12px 14px;
+      margin-top: 16px;
+      background: var(--card);
+    }
+    .summary.ok  { border-color: var(--green); }
+    .summary.warn { border-color: var(--red); }
+    .summary-title { font-weight: bold; margin-bottom: 6px; font-size: 0.9rem; }
+    .summary.ok  .summary-title { color: var(--green); }
+    .summary.warn .summary-title { color: var(--red); }
+    .summary-row { margin: 3px 0; font-size: 0.82rem; }
+    .updated { color: var(--dim); font-size: 0.72rem; text-align: center; margin-top: 14px; }
+    .error { color: var(--red); text-align: center; padding: 20px; }
+    .spinner { text-align: center; color: var(--cyan); padding: 20px; font-size: 1.2rem; }
+    .today-marker { color: var(--yellow); }
+  </style>
+</head>
+<body>
+  <h1>🌿 Поливна система</h1>
+  <p class="subtitle">Младост 3, София · ECMWF IFS 0.25° · Open-Meteo</p>
+
+  <button class="btn" id="refreshBtn" onclick="loadData()">🔄 Обнови прогнозата</button>
+
+  <div id="content"></div>
+
+  <script>
+    const LAT = 42.697, LON = 23.411;
+    const THRESHOLDS = [2,2,2,3,3,5,5,5,3,2,1,2];
+    const DAYS_BG = ['Нед','Пон','Вт','Ср','Чет','Пет','Съб'];
+    const WC_ICONS = {0:'☀️',1:'🌤',2:'⛅',3:'☁️',45:'🌫',48:'🌫',51:'🌦',53:'🌧',55:'🌧',61:'🌧',63:'🌧',65:'⛈',71:'🌨',73:'🌨',75:'❄️',80:'🌦',81:'🌧',82:'⛈',95:'⛈',96:'⛈',99:'⛈'};
+    const WC_DESC = {0:'Ясно',1:'Пред. ясно',2:'Променливо',3:'Облачно',45:'Мъгла',48:'Мъгла/скреж',51:'Ситен дъжд',53:'Дъжд',55:'Силен дъжд',61:'Дъжд',63:'Силен дъжд',65:'Проливен дъжд',71:'Сняг',73:'Силен сняг',75:'Виелица',80:'Превалявания',81:'Дъжд/превал.',82:'Силни превал.',95:'Гръмотевица',96:'Гръм+градушка',99:'Силна гръмотевица'};
+
+    function thresh(month) { return THRESHOLDS[month - 1]; }
+    function isSeason(month) { return month >= 4 && month <= 11; }
+
+    function fmtDate(d) {
+      return `${String(d.getDate()).padStart(2,'0')}.${String(d.getMonth()+1).padStart(2,'0')}.${d.getFullYear()}`;
+    }
+
+    function buildRow(dt, rain, wc, isToday, prob) {
+      const t = thresh(dt.getMonth()+1);
+      const season = isSeason(dt.getMonth()+1);
+      const skip = rain >= t;
+      const icon = WC_ICONS[wc] ?? '❓';
+      const desc = WC_DESC[wc] ?? `Код ${wc}`;
+      const day = DAYS_BG[dt.getDay()];
+      const dateStr = fmtDate(dt);
+
+      let actionHtml, rowClass = '';
+      if (!season) {
+        actionHtml = `<span class="action-off">— извън сезон —</span>`;
+        rowClass = 'off-season';
+      } else if (skip) {
+        actionHtml = `<span class="action-skip">❌ ПРОПУСКА</span>`;
+        rowClass = 'skip-day';
+      } else {
+        actionHtml = `<span class="action-water">✅ ПОЛИВА</span>`;
+      }
+      if (isToday) rowClass += ' today';
+
+      const rainHtml = rain > 0 ? `<span class="rain-pos">${rain.toFixed(1)} мм</span>` : `<span class="rain-zero">0.0 мм</span>`;
+      const dateHtml = isToday ? `<span class="today-marker">► ${dateStr}</span>` : dateStr;
+      const dayHtml  = isToday ? `<span class="today-marker">${day}</span>` : day;
+
+      let probCell = '';
+      if (prob !== undefined) {
+        const p = prob ?? 0;
+        const cls = p >= 70 ? 'prob-high' : p >= 40 ? 'prob-mid' : 'prob-low';
+        probCell = `<td><span class="${cls}">${p}%</span></td>`;
+      }
+
+      return `<tr class="${rowClass.trim()}">
+        <td>${dateHtml}</td>
+        <td>${dayHtml}</td>
+        <td>${icon}</td>
+        <td style="text-align:left">${desc}</td>
+        <td>${rainHtml}</td>
+        ${probCell}
+        <td><span style="color:var(--dim)">${t} мм</span></td>
+        <td>${actionHtml}</td>
+      </tr>`;
+    }
+
+    async function loadData() {
+      const btn = document.getElementById('refreshBtn');
+      const content = document.getElementById('content');
+      btn.disabled = true;
+      content.innerHTML = `<div class="spinner">⏳ Изтеглям данни…</div>`;
+
+      try {
+        const today = new Date();
+        const todayStr = today.toISOString().split('T')[0];
+        const histStart = new Date(today); histStart.setDate(histStart.getDate() - 7);
+        const histStartStr = histStart.toISOString().split('T')[0];
+
+        const [histRes, foreRes] = await Promise.all([
+          fetch(`https://archive-api.open-meteo.com/v1/archive?latitude=${LAT}&longitude=${LON}&start_date=${histStartStr}&end_date=${todayStr}&daily=precipitation_sum,weathercode&timezone=Europe/Sofia`),
+          fetch(`https://api.open-meteo.com/v1/forecast?latitude=${LAT}&longitude=${LON}&daily=precipitation_sum,precipitation_probability_max,weathercode&timezone=Europe/Sofia&forecast_days=7&models=ecmwf_ifs025`)
+        ]);
+
+        const hist = await histRes.json();
+        const fore = await foreRes.json();
+
+        // Historical table
+        let histRows = '';
+        hist.daily.time.forEach((d, i) => {
+          if (d === todayStr) return;
+          const dt = new Date(d + 'T12:00:00');
+          histRows += buildRow(dt, hist.daily.precipitation_sum[i] || 0, hist.daily.weathercode[i] || 0, false);
+        });
+
+        // Forecast table
+        let foreRows = '';
+        const skipDays = [];
+        fore.daily.time.forEach((d, i) => {
+          const dt = new Date(d + 'T12:00:00');
+          const rain = fore.daily.precipitation_sum[i] || 0;
+          const prob = fore.daily.precipitation_probability_max[i];
+          const wc   = fore.daily.weathercode[i] || 0;
+          const isToday = d === todayStr;
+          foreRows += buildRow(dt, rain, wc, isToday, prob);
+
+          const month = dt.getMonth()+1;
+          if (isSeason(month) && rain >= thresh(month)) {
+            skipDays.push({ dt, rain, prob, thresh: thresh(month) });
+          }
+        });
+
+        // Summary
+        let summaryHtml;
+        if (skipDays.length === 0) {
+          summaryHtml = `<div class="summary ok">
+            <div class="summary-title">✅ Статус</div>
+            <div class="summary-row">Няма дни с достатъчно дъжд — поливането върви нормално</div>
+          </div>`;
+        } else {
+          const rows = skipDays.map(r =>
+            `<div class="summary-row">❌ <strong>${fmtDate(r.dt)} ${DAYS_BG[r.dt.getDay()]}</strong> — <span style="color:var(--cyan)">${r.rain.toFixed(1)} мм</span> ≥ праг <span style="color:var(--dim)">${r.thresh} мм</span> <span style="color:var(--dim)">(вер. ${r.prob}%)</span></div>`
+          ).join('');
+          summaryHtml = `<div class="summary warn">
+            <div class="summary-title">❌ Дни без поливане тази седмица</div>
+            ${rows}
+          </div>`;
+        }
+
+        const threshLine = `Апр=${THRESHOLDS[3]} Май=${THRESHOLDS[4]} Юни=${THRESHOLDS[5]} Юли=${THRESHOLDS[6]} Авг=${THRESHOLDS[7]} Сеп=${THRESHOLDS[8]} Окт=${THRESHOLDS[9]} Ное=${THRESHOLDS[10]}`;
+        const now = new Date();
+        const updStr = `${String(now.getDate()).padStart(2,'0')}.${String(now.getMonth()+1).padStart(2,'0')}.${now.getFullYear()} ${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`;
+
+        content.innerHTML = `
+          <div class="section-title">📅 Последните 7 дни (реални данни)</div>
+          <div class="table-wrap"><table>
+            <thead><tr><th>Дата</th><th>Ден</th><th>Вр.</th><th>Описание</th><th>Валеж</th><th>Праг</th><th>Поливане</th></tr></thead>
+            <tbody>${histRows}</tbody>
+          </table></div>
+
+          <div class="section-title">🔮 Прогноза — следващите 7 дни (ECMWF)</div>
+          <div class="table-wrap"><table>
+            <thead><tr><th>Дата</th><th>Ден</th><th>Вр.</th><th>Описание</th><th>Валеж</th><th>Вер.</th><th>Праг</th><th>Поливане</th></tr></thead>
+            <tbody>${foreRows}</tbody>
+          </table></div>
+
+          ${summaryHtml}
+
+          <p class="updated">Актуализирано: ${updStr} · Прагове (мм): ${threshLine}</p>
+        `;
+      } catch (e) {
+        content.innerHTML = `<div class="error">❌ Грешка при зареждане: ${e.message}</div>`;
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
+    // Auto-load on start
+    loadData();
+  </script>
+</body>
+</html>
